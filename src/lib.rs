@@ -21,6 +21,7 @@ const DEFAULT_LOGO: [u8; 156] = [
 /// For details, read [GBATEK - GBA Cartridge
 /// Header](https://problemkaputt.de/gbatek.htm#gbacartridgeheader).
 #[derive(Clone, Copy)]
+#[repr(C)]
 pub struct GBAHeader {
   /// b label
   pub start_code: [u8; 4],
@@ -42,12 +43,16 @@ pub struct GBAHeader {
   /// zeroed space
   pub reserved_zeroed: [u8; 7],
   /// Release version of the game, just using 0 is fine.
-  pub software_version: u8,
+  pub version: u8,
   /// This is set by all the other fields. Set all your fields and then call
   /// `update_checksum`.
   pub checksum: u8,
   /// more zeroed space
   pub reserved_zeroed2: [u8; 2],
+}
+#[test]
+fn test_align() {
+  assert_eq!(core::mem::align_of::<GBAHeader>(), 1);
 }
 unsafe impl Zeroable for GBAHeader {}
 unsafe impl Pod for GBAHeader {}
