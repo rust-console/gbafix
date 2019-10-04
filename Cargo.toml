@@ -1,0 +1,13 @@
+[package]
+name = "gbafix"
+version = "0.0.0"
+authors = ["Lokathor <zefria@gmail.com>"]
+edition = "2018"
+description = "Rust port of the C `gbafix` utility. For GBA rom patching."
+keywords = ["gbafix", "gba"]
+categories = ["command-line-utilities", "development-tools::build-utils", "embedded"]
+license = "LGPL-3.0-or-later"
+repository = "https://github.com/rust-console/gbafix"
+
+[dependencies]
+bytemuck = "0.1"
