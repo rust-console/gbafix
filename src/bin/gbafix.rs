@@ -2,8 +2,8 @@ use bytemuck::*;
 use core::{convert::TryFrom, mem::size_of};
 use gbafix::*;
 use std::{
-  borrow::Cow,
   ffi::OsStr,
+  fs::{File, OpenOptions},
   io::{Read, Seek, SeekFrom, Write},
   path::{Path, PathBuf},
 };
@@ -13,9 +13,9 @@ const GBA_VERBOSE: &str = "GBAFIX_VERBOSE";
 macro_rules! verboseln {
   ($($arg:tt)*) => {
     if std::env::var(GBA_VERBOSE)
-      .map_err(|_| ())
-      .and_then(|s| s.parse::<i32>().map_err(|_|()))
-      .and_then(|i| Ok(i != 0))
+      .ok()
+      .and_then(|s| s.parse::<i32>().ok())
+      .map(|i| i != 0)
       .unwrap_or(false) {
       print!("> ");
       println!($($arg)*);
@@ -33,8 +33,8 @@ enum PatchOp {
   Debug(bool),
 }
 impl TryFrom<&str> for PatchOp {
-  type Error = Cow<'static, str>;
-  fn try_from(s: &str) -> Result<Self, Cow<'static, str>> {
+  type Error = &'static str;
+  fn try_from(s: &str) -> Result<Self, &'static str> {
     if s == "-p" {
       Ok(Self::Pad)
     } else if s.starts_with("-t") {
@@ -42,7 +42,7 @@ impl TryFrom<&str> for PatchOp {
       if title == "" {
         Ok(Self::Title(None))
       } else if title.len() > 12 {
-        Err(Cow::Borrowed("Title must be 12 or less"))
+        Err("Title must be 12 or less")
       } else {
         let mut bytes = [0; 12];
         bytes[..title.len()].copy_from_slice(title.as_bytes());
@@ -51,7 +51,7 @@ impl TryFrom<&str> for PatchOp {
     } else if s.starts_with("-c") {
       let game_code = &s[2..];
       if game_code.len() > 4 {
-        Err(Cow::Borrowed("Game code must be 4 or less"))
+        Err("Game code must be 4 or less")
       } else {
         let mut bytes = [0; 4];
         bytes[..game_code.len()].copy_from_slice(game_code.as_bytes());
@@ -60,7 +60,7 @@ impl TryFrom<&str> for PatchOp {
     } else if s.starts_with("-m") {
       let maker_code = &s[2..];
       if maker_code.len() > 2 {
-        Err(Cow::Borrowed("Maker code must be 2 or less"))
+        Err("Maker code must be 2 or less")
       } else {
         let mut bytes = [0; 2];
         bytes[..maker_code.len()].copy_from_slice(maker_code.as_bytes());
@@ -70,22 +70,22 @@ impl TryFrom<&str> for PatchOp {
       s[2..]
         .parse::<u8>()
         .map(Self::Version)
-        .map_err(|_| Cow::Borrowed("Couldn't parse the version value"))
+        .map_err(|_| "Couldn't parse the version value")
     } else if s.starts_with("-d") {
       s[2..]
         .parse::<u8>()
-        .map_err(|_| Cow::Borrowed("Couldn't parse debug level, use 0 or 1"))
+        .map_err(|_| "Couldn't parse debug level, use 0 or 1")
         .and_then(|b| {
           if b == 0 {
             Ok(Self::Debug(false))
           } else if b == 1 {
             Ok(Self::Debug(true))
           } else {
-            Err(Cow::Borrowed("Debug level must be 0 or 1"))
+            Err("Debug level must be 0 or 1")
           }
         })
     } else {
-      Err(Cow::Borrowed("Unknown Error"))
+      Err("Unknown Error")
     }
   }
 }
@@ -95,15 +95,15 @@ fn main() {
   let mut patch_ops: Vec<PatchOp> = Vec::new();
   for os_string in std::env::args_os().skip(1) {
     match os_string.to_str() {
-      Some("-") => {
-        eprintln!("ERROR: Empty argument '-' given!");
-        print_usage_and_exit(-1);
-      }
+      Some("--help") => print_usage_and_exit(0),
       Some("--verbose") => {
         std::env::set_var(GBA_VERBOSE, "1");
         verboseln!("Enabling verbose output.");
       }
-      Some("--help") => print_usage_and_exit(0),
+      Some("-") => {
+        eprintln!("ERROR: Empty argument '-' given!");
+        print_usage_and_exit(-1);
+      }
       Some(s) => {
         if s.starts_with('-') {
           match PatchOp::try_from(s) {
@@ -134,107 +134,111 @@ fn main() {
     print_usage_and_exit(-1);
   }
 
-  let mut open_options = std::fs::OpenOptions::new();
-  open_options.read(true);
-  open_options.write(true);
-
   let mut byte_buf: Vec<u8> = Vec::new();
-  'paths: for path_buf in path_bufs.into_iter() {
-    verboseln!("Loading {}", path_buf.display());
-    if Some("gba") != path_buf.extension().and_then(OsStr::to_str) {
-      eprintln!(
-        "ERROR: {}: can only process '*.gba' files.",
-        path_buf.display()
-      );
-      continue;
-    }
-    let mut f = match open_options.open(&path_buf) {
+  for path_buf in path_bufs.into_iter() {
+    byte_buf.clear();
+    verboseln!("Processing {}", path_buf.display());
+
+    let mut f = match load_gba_bytes(&path_buf, &mut byte_buf) {
       Ok(f) => f,
       Err(e) => {
-        eprintln!("ERROR: couldn't open {}: {}", path_buf.display(), e);
-        continue 'paths;
+        eprintln!("{}", e);
+        continue;
       }
     };
-    match f.read_to_end(&mut byte_buf) {
-      Ok(_) => (),
-      Err(e) => {
-        eprintln!("ERROR: couldn't read {}: {}", path_buf.display(), e);
-        continue 'paths;
-      }
-    }
-    if byte_buf.len() < size_of::<GBAHeader>() {
-      eprintln!(
-        "ERROR: {} is smaller than a rom header!",
-        path_buf.display()
-      );
-      continue 'paths;
-    }
 
-    verboseln!("Processing {}", path_buf.display());
-    if patch_ops.contains(&PatchOp::Pad) && !byte_buf.len().is_power_of_two() {
-      let len = byte_buf.len();
-      let new_size = len.next_power_of_two();
-      byte_buf.reserve(new_size - len); // ensureCapacity, but dumb
-      while byte_buf.len() < new_size {
-        byte_buf.push(0);
-      }
-    }
-    let (head_mut, _tail_mut) = byte_buf.split_at_mut(size_of::<GBAHeader>());
-    let header_slice_mut: &mut [GBAHeader] = cast_slice_mut(head_mut);
-    let header: &mut GBAHeader = &mut header_slice_mut[0];
-    for op in patch_ops.iter().copied() {
-      match op {
-        PatchOp::Pad => continue, /* Handled before we start touching the header */
-        PatchOp::Title(new_opt_title) => {
-          header.title = new_opt_title.unwrap_or_else(|| {
-            // the file extension filter above should assure that we have a
-            // valid file_stem value as well.
-            let stem = Path::new(path_buf.file_stem().unwrap())
-              .display()
-              .to_string();
-            let stem_len_t = stem.len().min(12);
-            let mut new_title = [0_u8; 12];
-            new_title[..stem_len_t]
-              .copy_from_slice(stem[..stem_len_t].as_bytes());
-            new_title
-          });
-        }
-        PatchOp::GameCode(new_game_code) => header.game_code = new_game_code,
-        PatchOp::MakerCode(new_maker_code) => {
-          header.maker_code = new_maker_code
-        }
-        PatchOp::Version(new_version) => header.version = new_version,
-        PatchOp::Debug(new_debug) => header.set_debugging(new_debug),
-      }
-    }
-    header.update_checksum();
+    patch_gba(&patch_ops, &mut byte_buf, &path_buf);
 
-    verboseln!("Writing {}", path_buf.display());
-    match f.seek(SeekFrom::Start(0)) {
-      Ok(_) => (),
+    match write_gba(&mut f, &byte_buf, &path_buf) {
+      Ok(()) => f,
       Err(e) => {
-        eprintln!(
-          "ERROR: couldn't save new data for {}: {}",
-          path_buf.display(),
-          e
-        );
-        continue 'paths;
+        eprintln!("{}", e);
+        continue;
       }
     };
-    match f.write_all(&byte_buf) {
-      Ok(()) => (),
-      Err(e) => {
-        eprintln!(
-          "ERROR: couldn't save new data for {}: {}",
-          path_buf.display(),
-          e
-        );
-        continue 'paths;
-      }
-    };
-    byte_buf.clear();
-    println!("ROM fixed!");
+
+    println!("{} fixed!", path_buf.display());
   }
+}
+
+fn load_gba_bytes(path: &Path, buffer: &mut Vec<u8>) -> Result<File, String> {
+  verboseln!("Loading {}", path.display());
+  if Some("gba") != path.extension().and_then(OsStr::to_str) {
+    return Err(format!(
+      "ERROR: {}: can only process '*.gba' files.",
+      path.display()
+    ));
+  }
+  let mut f = OpenOptions::new()
+    .read(true)
+    .write(true)
+    .open(path)
+    .map_err(|e| format!("ERROR: couldn't open {}: {}", path.display(), e))?;
+  let bytes_read = f
+    .read_to_end(buffer)
+    .map_err(|e| format!("ERROR: couldn't read {}: {}", path.display(), e))?;
+  if bytes_read < size_of::<GBAHeader>() {
+    Err(format!(
+      "ERROR: {} is smaller than a rom header!",
+      path.display()
+    ))
+  } else {
+    Ok(f)
+  }
+}
+
+fn patch_gba(patches: &[PatchOp], byte_buf: &mut Vec<u8>, path: &Path) {
+  verboseln!("Applying requested patches...");
+
+  // pad out the file if requested and if necessary
+  if patches.contains(&PatchOp::Pad) && !byte_buf.len().is_power_of_two() {
+    let len = byte_buf.len();
+    let new_size = len.next_power_of_two();
+    byte_buf.reserve(new_size - len); // ensureCapacity, but dumb
+    while byte_buf.len() < new_size {
+      byte_buf.push(0);
+    }
+  }
+
+  // grab the header and apply all header patches requested
+  let header: &mut GBAHeader =
+    &mut cast_slice_mut(byte_buf.split_at_mut(size_of::<GBAHeader>()).0)[0];
+  for op in patches.iter().copied() {
+    match op {
+      PatchOp::Pad => continue, /* Handled above */
+      PatchOp::Title(new_opt_title) => {
+        header.title = new_opt_title.unwrap_or_else(|| {
+          // the file extension filter above should assure that we have a
+          // valid file_stem value as well.
+          let stem = Path::new(path.file_stem().unwrap()).display().to_string();
+          let stem_len_t = stem.len().min(12);
+          let mut new_title = [0_u8; 12];
+          new_title[..stem_len_t]
+            .copy_from_slice(stem[..stem_len_t].as_bytes());
+          new_title
+        });
+      }
+      PatchOp::GameCode(new_game_code) => header.game_code = new_game_code,
+      PatchOp::MakerCode(new_maker_code) => header.maker_code = new_maker_code,
+      PatchOp::Version(new_version) => header.version = new_version,
+      PatchOp::Debug(new_debug) => header.set_debugging(new_debug),
+    }
+  }
+  header.update_checksum();
+}
+
+fn write_gba(file: &mut File, bytes: &[u8], path: &Path) -> Result<(), String> {
+  verboseln!("Writing {}", path.display());
+  file
+    .seek(SeekFrom::Start(0))
+    .and_then(|_| file.write_all(&bytes))
+    .map_err(|e| {
+      format!(
+        "ERROR: couldn't save new data for {}: {}",
+        path.display(),
+        e
+      )
+    })
 }
 
 #[rustfmt::skip]
