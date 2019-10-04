@@ -1,12 +1,12 @@
+use bytemuck::*;
 use core::{convert::TryFrom, mem::size_of};
+use gbafix::*;
 use std::{
   borrow::Cow,
-  io::{Read, Seek, Write},
+  ffi::OsStr,
+  io::{Read, Seek, SeekFrom, Write},
   path::{Path, PathBuf},
 };
-
-use bytemuck::*;
-use gbafix::*;
 
 const GBA_VERBOSE: &str = "GBAFIX_VERBOSE";
 
@@ -42,51 +42,37 @@ impl TryFrom<&str> for PatchOp {
       if title == "" {
         Ok(Self::Title(None))
       } else if title.len() > 12 {
-        Err(Cow::Borrowed("Title given longer than 12"))
+        Err(Cow::Borrowed("Title must be 12 or less"))
       } else {
         let mut bytes = [0; 12];
-        for (title_src, byte_dest) in
-          title.as_bytes().iter().copied().zip(bytes.iter_mut())
-        {
-          *byte_dest = title_src;
-        }
+        bytes[..title.len()].copy_from_slice(title.as_bytes());
         Ok(Self::Title(Some(bytes)))
       }
     } else if s.starts_with("-c") {
       let game_code = &s[2..];
       if game_code.len() > 4 {
-        Err(Cow::Borrowed("Game code given longer than 4"))
+        Err(Cow::Borrowed("Game code must be 4 or less"))
       } else {
         let mut bytes = [0; 4];
-        for (title_src, byte_dest) in
-          game_code.as_bytes().iter().copied().zip(bytes.iter_mut())
-        {
-          *byte_dest = title_src;
-        }
+        bytes[..game_code.len()].copy_from_slice(game_code.as_bytes());
         Ok(Self::GameCode(bytes))
       }
     } else if s.starts_with("-m") {
       let maker_code = &s[2..];
       if maker_code.len() > 2 {
-        Err(Cow::Borrowed("Maker code given longer than 2"))
+        Err(Cow::Borrowed("Maker code must be 2 or less"))
       } else {
         let mut bytes = [0; 2];
-        for (title_src, byte_dest) in
-          maker_code.as_bytes().iter().copied().zip(bytes.iter_mut())
-        {
-          *byte_dest = title_src;
-        }
+        bytes[..maker_code.len()].copy_from_slice(maker_code.as_bytes());
         Ok(Self::MakerCode(bytes))
       }
     } else if s.starts_with("-r") {
-      let version = &s[2..];
-      version
+      s[2..]
         .parse::<u8>()
         .map(Self::Version)
-        .map_err(|_| Cow::Borrowed("Couldn't parse the version as a u8"))
+        .map_err(|_| Cow::Borrowed("Couldn't parse the version value"))
     } else if s.starts_with("-d") {
-      let version = &s[2..];
-      version
+      s[2..]
         .parse::<u8>()
         .map_err(|_| Cow::Borrowed("Couldn't parse debug level, use 0 or 1"))
         .and_then(|b| {
@@ -117,9 +103,7 @@ fn main() {
         std::env::set_var(GBA_VERBOSE, "1");
         verboseln!("Enabling verbose output.");
       }
-      Some("--help") => {
-        print_usage_and_exit(0);
-      }
+      Some("--help") => print_usage_and_exit(0),
       Some(s) => {
         if s.starts_with('-') {
           match PatchOp::try_from(s) {
@@ -157,7 +141,7 @@ fn main() {
   let mut byte_buf: Vec<u8> = Vec::new();
   'paths: for path_buf in path_bufs.into_iter() {
     verboseln!("Loading {}", path_buf.display());
-    if Some("gba") != path_buf.extension().and_then(std::ffi::OsStr::to_str) {
+    if Some("gba") != path_buf.extension().and_then(OsStr::to_str) {
       eprintln!(
         "ERROR: {}: can only process '*.gba' files.",
         path_buf.display()
@@ -202,22 +186,18 @@ fn main() {
       match op {
         PatchOp::Pad => continue, /* Handled before we start touching the header */
         PatchOp::Title(new_opt_title) => {
-          let new_title: [u8; 12] = new_opt_title.unwrap_or_else(|| {
+          header.title = new_opt_title.unwrap_or_else(|| {
             // the file extension filter above should assure that we have a
             // valid file_stem value as well.
-            let string = Path::new(path_buf.file_stem().unwrap())
+            let stem = Path::new(path_buf.file_stem().unwrap())
               .display()
               .to_string();
-            let mut new_title = [0; 12];
-            for (dest_byte, src_byte) in new_title
-              .iter_mut()
-              .zip(string[..12].as_bytes().iter().copied())
-            {
-              *dest_byte = src_byte;
-            }
+            let stem_len_t = stem.len().min(12);
+            let mut new_title = [0_u8; 12];
+            new_title[..stem_len_t]
+              .copy_from_slice(stem[..stem_len_t].as_bytes());
             new_title
           });
-          header.title = new_title;
         }
         PatchOp::GameCode(new_game_code) => header.game_code = new_game_code,
         PatchOp::MakerCode(new_maker_code) => {
@@ -230,7 +210,7 @@ fn main() {
     header.update_checksum();
 
     verboseln!("Writing {}", path_buf.display());
-    match f.seek(std::io::SeekFrom::Start(0)) {
+    match f.seek(SeekFrom::Start(0)) {
       Ok(_) => (),
       Err(e) => {
         eprintln!(
