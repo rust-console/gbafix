@@ -96,6 +96,10 @@ fn main() {
   for os_string in std::env::args_os().skip(1) {
     match os_string.to_str() {
       Some("--help") => print_usage_and_exit(0),
+      Some("--version") => {
+        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        std::process::exit(0);
+      }
       Some("--verbose") => {
         std::env::set_var(GBA_VERBOSE, "1");
         verboseln!("Enabling verbose output.");
@@ -157,7 +161,7 @@ fn main() {
       }
     };
 
-    println!("{} fixed!", path_buf.display());
+    verboseln!("{} fixed!", path_buf.display());
   }
 }
 
@@ -255,7 +259,7 @@ fn print_usage_and_exit(exit_code: i32) -> ! {
     "Title, game code, and maker are 0 padded on the end if they're too short.",
     "",
     "Args are as follows:",
-    "  -p             Pad to next power of 2.",
+    "  -p             Pad rom file byte size to next power of 2.",
     "  -t[<title>]    Patch title, 12 bytes, or stripped filename with '-t'",
     "  -c<game_code>  Patch game code, 4 bytes.",
     "  -m<maker_code> Patch maker code, 2 bytes.",
@@ -263,6 +267,7 @@ fn print_usage_and_exit(exit_code: i32) -> ! {
     "  -d<debug>      Enable debugging handler and set debug entry point (0 or 1).",
     "  --verbose      Give verbose output of what's happening.",
     "  --help         Print this message to stdout and exit 0.",
+    "  --version      Print version to stdout and exit 0.",
   ];
   if exit_code == 0 {
     for line in lines.iter() {
