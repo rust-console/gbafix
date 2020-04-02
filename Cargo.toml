@@ -1,6 +1,6 @@
 [package]
 name = "gbafix"
-version = "1.0.3-alpha.0"
+version = "1.0.3"
 authors = ["Lokathor <zefria@gmail.com>"]
 edition = "2018"
 description = "Rust port of the C `gbafix` utility. For GBA rom patching."
