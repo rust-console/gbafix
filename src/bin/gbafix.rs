@@ -194,7 +194,7 @@ fn load_gba_bytes(path: &Path, buffer: &mut Vec<u8>) -> Result<File, String> {
 fn patch_gba(patches: &[PatchOp], byte_buf: &mut Vec<u8>, path: &Path) {
   verboseln!("Applying requested patches...");
 
-  // pad out the file if requested and if necessary
+  // pad out the file if requested (and if necessary)
   if patches.contains(&PatchOp::Pad) && !byte_buf.len().is_power_of_two() {
     let len = byte_buf.len();
     let new_size = len.next_power_of_two();
@@ -204,9 +204,18 @@ fn patch_gba(patches: &[PatchOp], byte_buf: &mut Vec<u8>, path: &Path) {
     }
   }
 
-  // grab the header and apply all header patches requested
+  // grab the header
   let header: &mut GBAHeader =
     &mut cast_slice_mut(byte_buf.split_at_mut(size_of::<GBAHeader>()).0)[0];
+
+  // First we ensure that the required regions are correct
+  header.logo = DEFAULT_LOGO;
+  header.ninety_six = 0x96;
+  header.main_unit = 0;
+  header.reserved_zeroed = [0; 7];
+  header.reserved_zeroed2 = [0; 2];
+
+  // then we apply all additional patches requested.
   for op in patches.iter().copied() {
     match op {
       PatchOp::Pad => continue, /* Handled above */
@@ -253,6 +262,7 @@ fn print_usage_and_exit(exit_code: i32) -> ! {
     "",
     "==USAGE: gbafix [args...] [roms...]",
     "",
+    "This will reset the logo region of the header (no arg required).",
     "Args and roms can be in any order.",
     "Args start with '-', everything else is taken as a rom name.",
     "The same set of args is used to patch all roms specified.",
